@@ -8,3 +8,6 @@ coverage/
 prisma/dev.db
 /.vscode/
 /.idea/
+nordsecure
+NordSecure-deploy.tar.gz
+nordsecure.pub
