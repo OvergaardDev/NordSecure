@@ -18,8 +18,8 @@ export default async function SuccessPage({ searchParams }: Props) {
     : null
 
   return (
-    <div className="max-w-lg mx-auto text-center py-16">
-      <div className="text-6xl mb-6" aria-hidden="true">🎉</div>
+    <div className="max-w-lg mx-auto text-center py-16 animate-fade-in">
+      <div className="text-6xl mb-6 inline-block animate-bounce-gentle" aria-hidden="true">🎉</div>
       <h1 className="text-3xl font-bold text-white mb-3">Order Confirmed!</h1>
       {order ? (
         <>

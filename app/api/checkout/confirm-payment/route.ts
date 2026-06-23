@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '../../../../src/lib/prisma'
-import { getCryptoProvider, isLivePaymentMode } from '../../../../src/lib/paymentProvider'
+import { getCryptoProvider, getStripeProvider, isLivePaymentMode } from '../../../../src/lib/paymentProvider'
 import { includeTestOrdersForStorefront, soldCountWhere } from '../../../../src/lib/sales'
 import { normalizeCountryCode } from '../../../../src/lib/shipping'
 import { isCryptoPaymentPaid } from '@/src/lib/simulatedCryptoPayments'
+import { sendOrderConfirmation } from '@/src/lib/email'
 
 export async function POST(req: Request) {
   const body = await req.json()
@@ -38,8 +39,13 @@ export async function POST(req: Request) {
 
   let verified
   try {
-    const provider = getCryptoProvider()
-    verified = await provider.verifyPayment(paymentId)
+    if (reservation.paymentMethod === 'stripe') {
+      const provider = getStripeProvider()
+      verified = await provider.verifyPayment(paymentId)
+    } else {
+      const provider = getCryptoProvider()
+      verified = await provider.verifyPayment(paymentId)
+    }
   } catch (error) {
     if (error instanceof Error && error.message === 'btcpay_not_configured') {
       return NextResponse.json({ error: 'live_crypto_not_configured' }, { status: 500 })
@@ -52,6 +58,11 @@ export async function POST(req: Request) {
   const isPaid = verified?.status === 'paid' || reservation.paymentStatus === 'paid' || simulatedPaid
 
   if (!isPaid) return NextResponse.json({ status: 'pending' })
+
+  // Get product details for email
+  const product = await prisma.product.findUnique({
+    where: { id: reservation.productId },
+  })
 
   // atomic create order and ensure campaign index hasn't advanced
   const result = await prisma.$transaction(async (tx) => {
@@ -114,8 +125,37 @@ export async function POST(req: Request) {
     // remove reservation
     await tx.reservation.delete({ where: { id: reservation.id } })
 
-    return { ok: true, orderId: order.id }
+    return { ok: true, orderId: order.id, orderNumber: order.orderNumber, totalAmount: order.totalAmount }
   })
+
+  // Send order confirmation email after transaction completes
+  if (result.ok && product) {
+    await sendOrderConfirmation(
+      customerEmail,
+      result.orderNumber,
+      result.totalAmount,
+      !liveMode,
+      {
+        customerName,
+        items: [
+          {
+            productName: product.name,
+            quantity: reservation.quantity,
+            unitPrice: result.totalAmount,
+          },
+        ],
+        paymentMethod: reservation.paymentMethod,
+        shippingAddress: {
+          addressLine1: shippingAddressLine1,
+          addressLine2: shippingAddressLine2,
+          city: shippingCity,
+          region: shippingRegion,
+          postalCode: shippingPostalCode,
+          country: normalizedCountry,
+        },
+      }
+    ).catch((err) => console.error('Email send error (non-fatal):', err))
+  }
 
   return NextResponse.json(result)
 }

@@ -5,6 +5,7 @@ const navLinks = [
   { href: '/admin', label: 'Overview', icon: '📊' },
   { href: '/admin/orders', label: 'Orders', icon: '📦' },
   { href: '/admin/reviews', label: 'Reviews', icon: '⭐' },
+  { href: '/admin/posts/new', label: 'New Post', icon: '➕' },
   { href: '/admin/posts', label: 'Blog / CMS', icon: '✏️' },
   { href: '/admin/inventory', label: 'Inventory', icon: '🏪' },
 ]

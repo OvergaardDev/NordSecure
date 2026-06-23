@@ -96,3 +96,32 @@ export function shippingRequirementsFromDenmark(countryCode: string): ShippingRe
         ],
   }
 }
+
+/**
+ * Calculate shipping cost from Denmark based on destination country
+ * Returns cost in EUR
+ */
+export function calculateShippingCost(countryCode: string): number {
+  const code = normalizeCountryCode(countryCode)
+  
+  // Same country (Denmark) - free shipping
+  if (code === 'DK') return 0
+  
+  // EU countries - €25
+  if (isEuMemberState(code)) return 25
+  
+  // Non-EU Europe - €40
+  return 40
+}
+
+/**
+ * Get country calling code (for phone number formatting)
+ */
+export const COUNTRY_CALLING_CODES: Record<string, string> = {
+  AL: '+355', AD: '+376', AT: '+43', BE: '+32', BA: '+387', BG: '+359', HR: '+385', CY: '+357',
+  CZ: '+420', DK: '+45', EE: '+372', FI: '+358', FR: '+33', DE: '+49', GR: '+30', HU: '+36',
+  IS: '+354', IE: '+353', IT: '+39', XK: '+383', LV: '+371', LI: '+423', LT: '+370', LU: '+352',
+  MT: '+356', MD: '+373', MC: '+377', ME: '+382', NL: '+31', MK: '+389', NO: '+47', PL: '+48',
+  PT: '+351', RO: '+40', SM: '+378', RS: '+381', SK: '+421', SI: '+386', ES: '+34', SE: '+46',
+  CH: '+41', UA: '+380', GB: '+44', VA: '+39',
+}

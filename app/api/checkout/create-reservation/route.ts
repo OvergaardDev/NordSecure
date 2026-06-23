@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '../../../../src/lib/prisma'
 import { priceForOrder } from '../../../../src/lib/campaign'
-import { getCryptoProvider } from '../../../../src/lib/paymentProvider'
+import { getCryptoProvider, getStripeProvider } from '../../../../src/lib/paymentProvider'
 import { includeTestOrdersForStorefront, soldCountWhere } from '../../../../src/lib/sales'
 import { validateCouponForAmount } from '@/src/lib/coupons'
+import { calculateShippingCost, normalizeCountryCode } from '@/src/lib/shipping'
 
-const CRYPTO_ASSETS = new Set(['btc', 'ltc', 'xmr', 'sol'])
+const CRYPTO_ASSETS = new Set(['btc'])
 
 export async function POST(req: Request) {
   const body = await req.json()
@@ -27,15 +28,12 @@ export async function POST(req: Request) {
   if (!customerName || !customerEmail || !country || !shippingPhone || !shippingAddressLine1 || !shippingCity || !shippingPostalCode) {
     return NextResponse.json({ error: 'invalid_input' }, { status: 400 })
   }
-  if (paymentMethod === 'revolut_pro') {
-    return NextResponse.json({ error: 'revolut_coming_soon' }, { status: 400 })
-  }
-  if (paymentMethod !== 'crypto') {
-    return NextResponse.json({ error: 'crypto_only' }, { status: 400 })
+  if (paymentMethod !== 'crypto' && paymentMethod !== 'stripe') {
+    return NextResponse.json({ error: 'invalid_payment_method' }, { status: 400 })
   }
 
   const normalizedAsset = String(paymentAsset ?? '').toLowerCase()
-  if (!CRYPTO_ASSETS.has(normalizedAsset)) {
+  if (paymentMethod === 'crypto' && !CRYPTO_ASSETS.has(normalizedAsset)) {
     return NextResponse.json({ error: 'invalid_crypto_asset' }, { status: 400 })
   }
 
@@ -48,7 +46,7 @@ export async function POST(req: Request) {
 
   let appliedCouponCode: string | null = null
   let discountAmount = 0
-  let lockedPrice = baseLockedPrice
+  let productTotal = baseLockedPrice
 
   if (couponCode) {
     const couponCheck = await validateCouponForAmount(String(couponCode), baseLockedPrice)
@@ -57,8 +55,12 @@ export async function POST(req: Request) {
     }
     appliedCouponCode = couponCheck.code || null
     discountAmount = couponCheck.discountAmount || 0
-    lockedPrice = couponCheck.finalAmount || baseLockedPrice
+    productTotal = couponCheck.finalAmount || baseLockedPrice
   }
+
+  const normalizedCountry = normalizeCountryCode(country)
+  const shippingCost = calculateShippingCost(normalizedCountry)
+  const lockedPrice = productTotal + shippingCost
 
   // find product
   const product = await prisma.product.findUnique({ where: { sku: productSku } })
@@ -85,11 +87,23 @@ export async function POST(req: Request) {
 
   let payment
   try {
-    const provider = getCryptoProvider()
-    payment = await provider.createPayment(lockedPrice, 'EUR', {
-      reservationId: reservation.id,
-      asset: normalizedAsset,
-    })
+    if (paymentMethod === 'crypto') {
+      const provider = getCryptoProvider()
+      payment = await provider.createPayment(lockedPrice, 'EUR', {
+        reservationId: reservation.id,
+        asset: normalizedAsset,
+      })
+    } else if (paymentMethod === 'stripe') {
+      const provider = getStripeProvider()
+      payment = await provider.createPayment(lockedPrice, 'EUR', {
+        reservationId: reservation.id,
+        country: normalizedCountry,
+        shippingCost,
+        productTotal,
+      })
+    } else {
+      throw new Error('invalid_payment_method')
+    }
     await prisma.reservation.update({
       where: { id: reservation.id },
       data: { paymentId: payment.id },
@@ -105,6 +119,8 @@ export async function POST(req: Request) {
   return NextResponse.json({
     reservationId: reservation.id,
     lockedPrice,
+    productTotal,
+    shippingCost,
     payment,
     coupon: appliedCouponCode
       ? {

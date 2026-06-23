@@ -91,16 +91,16 @@ model Review {
 }
 
 model Post {
-  id          Int      @id @default(autoincrement())
-  title       String
-  slug        String   @unique
-  excerpt     String?
-  content     String
+  id            Int      @id @default(autoincrement())
+  title         String
+  slug          String   @unique
+  excerpt       String?
+  content       String
   featuredImage String?
-  tags        String?
-  status      String   @default("draft")
-  publishedAt DateTime?
-  createdAt   DateTime @default(now())
+  tags          String?
+  status        String   @default("draft")
+  publishedAt   DateTime?
+  createdAt     DateTime @default(now())
 }
 
 model Event {

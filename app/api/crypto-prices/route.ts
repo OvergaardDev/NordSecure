@@ -3,21 +3,15 @@ import { NextResponse } from 'next/server'
 // Map our assets to CoinGecko IDs
 const COIN_IDS: Record<string, string> = {
   btc: 'bitcoin',
-  ltc: 'litecoin',
-  xmr: 'monero',
-  sol: 'solana',
 }
 
 const COIN_SYMBOLS: Record<string, string> = {
   btc: '₿',
-  ltc: 'Ł',
-  xmr: '🔐',
-  sol: '◎',
 }
 
 export async function GET(req: Request) {
   try {
-    const assets = ['btc', 'ltc', 'xmr', 'sol']
+    const assets = ['btc']
     const coinGeckoIds = assets.map(a => COIN_IDS[a]).join(',')
 
     // Fetch live prices from CoinGecko API (free, no auth)

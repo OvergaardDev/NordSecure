@@ -1,0 +1,29 @@
+# NordSecure robots.txt
+# SEO configuration for search engine crawlers
+
+User-agent: *
+Allow: /
+Allow: /about
+Allow: /blog
+Allow: /checkout
+Allow: /privacy
+Allow: /shipping
+Allow: /terms
+
+# Disallow crawling of sensitive paths
+Disallow: /admin/
+Disallow: /api/
+Disallow: /checkout/success
+
+# Sitemap reference
+Sitemap: https://nordsecure.eu/sitemap.xml
+
+# Crawl delay (optional, helps with server load)
+Crawl-delay: 1
+
+# User-agent specific rules
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /

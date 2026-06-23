@@ -2,8 +2,10 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { EUROPE_SHIPPING_COUNTRIES, normalizeCountryCode } from '@/src/lib/shipping'
+import { EUROPE_SHIPPING_COUNTRIES, normalizeCountryCode, calculateShippingCost, COUNTRY_CALLING_CODES } from '@/src/lib/shipping'
 import { trackEvent, getSessionId } from '@/src/lib/events'
+import { Elements, PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js'
+import { loadStripe } from '@stripe/stripe-js'
 
 interface CheckoutFormProps {
   productSku: string
@@ -19,8 +21,8 @@ type CouponApplied = {
 }
 
 type Step = 'address' | 'payment' | 'confirming' | 'done'
-type PaymentMethod = 'crypto' | 'revolut_pro'
-type CryptoAsset = 'btc' | 'ltc' | 'xmr' | 'sol'
+type PaymentMethod = 'crypto' | 'stripe'
+type CryptoAsset = 'btc'
 
 interface CryptoPrice {
   eur: number
@@ -29,15 +31,86 @@ interface CryptoPrice {
 }
 
 const IS_LIVE_MODE = process.env.NEXT_PUBLIC_PAYMENT_MODE === 'live'
+const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''
+const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null
 
 const CRYPTO_OPTIONS: Array<{ value: CryptoAsset; label: string }> = [
   { value: 'btc', label: 'BTC' },
-  { value: 'ltc', label: 'LTC' },
-  { value: 'xmr', label: 'XMR' },
-  { value: 'sol', label: 'SOL' },
 ]
 
-const REVOLUT_COMING_SOON = true
+function StripePaymentPanel({
+  amount,
+  clientSecret,
+  loading,
+  onPaid,
+  onError,
+}: {
+  amount: number
+  clientSecret: string
+  loading: boolean
+  onPaid: (paymentIntentId: string) => Promise<void>
+  onError: (message: string) => void
+}) {
+  const stripe = useStripe()
+  const elements = useElements()
+  const [submitting, setSubmitting] = useState(false)
+
+  const canSubmit = Boolean(stripe && elements && !submitting && !loading)
+
+  const handleStripeSubmit = async () => {
+    if (!stripe || !elements) {
+      onError('Stripe is still loading. Please wait a moment and try again.')
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      const { error, paymentIntent } = await stripe.confirmPayment({
+        elements,
+        redirect: 'if_required',
+      })
+
+      if (error) {
+        onError(error.message || 'Could not complete card payment. Please check your card details.')
+        return
+      }
+
+      if (!paymentIntent?.id) {
+        onError('Payment did not return a valid payment intent. Please try again.')
+        return
+      }
+
+      if (paymentIntent.status !== 'succeeded' && paymentIntent.status !== 'processing') {
+        onError(`Payment status is ${paymentIntent.status}. Please complete authentication and try again.`)
+        return
+      }
+
+      await onPaid(paymentIntent.id)
+    } catch {
+      onError('Card payment failed. Please try again in a moment.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <>
+      <p className="text-slate-400 text-sm">Enter your card details to complete the payment of €{amount}.</p>
+      <div className="bg-slate-800 rounded-lg p-4 min-h-[200px]">
+        <PaymentElement />
+      </div>
+      <button
+        onClick={handleStripeSubmit}
+        disabled={!canSubmit}
+        className="w-full bg-brand-500 hover:bg-brand-400 active:scale-95 disabled:opacity-60 text-white px-6 py-3 rounded-xl font-semibold transition-all min-h-[44px]"
+      >
+        {submitting || loading ? 'Processing…' : 'Complete Payment'}
+      </button>
+      <p className="text-xs text-slate-500">Secured by Stripe. Your card details are never stored on NordSecure servers.</p>
+      <input type="hidden" value={clientSecret} readOnly />
+    </>
+  )
+}
 
 export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: CheckoutFormProps) {
   const router = useRouter()
@@ -61,17 +134,16 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
   const [reservationId, setReservationId] = useState<number | null>(null)
   const [paymentId, setPaymentId] = useState<string | null>(null)
   const [cryptoMeta, setCryptoMeta] = useState<{ asset: string; address: string; qrUrl: string; checkoutUrl?: string | null } | null>(null)
+  const [stripeClientSecret, setStripeClientSecret] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [couponCode, setCouponCode] = useState('')
   const [couponApplied, setCouponApplied] = useState<CouponApplied | null>(null)
   const [couponLoading, setCouponLoading] = useState(false)
   const [payableTotal, setPayableTotal] = useState(total)
+  const [shippingCost, setShippingCost] = useState(() => calculateShippingCost('DK'))
   const [cryptoPrices, setCryptoPrices] = useState<Record<CryptoAsset, CryptoPrice | null>>({
     btc: null,
-    ltc: null,
-    xmr: null,
-    sol: null,
   })
   const [priceError, setPriceError] = useState(false)
 
@@ -90,9 +162,7 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
         // Set fallback prices
         setCryptoPrices({
           btc: { eur: 45000, symbol: '₿', name: 'BTC' },
-          ltc: { eur: 90, symbol: 'Ł', name: 'LTC' },
-          xmr: { eur: 150, symbol: '🔐', name: 'XMR' },
-          sol: { eur: 140, symbol: '◎', name: 'SOL' },
+
         })
       }
     }
@@ -101,6 +171,19 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
     const interval = setInterval(fetchPrices, 60000)
     return () => clearInterval(interval)
   }, [])
+
+  // Recalculate shipping cost and total when country changes
+  useEffect(() => {
+    const shipping = calculateShippingCost(form.country)
+    setShippingCost(shipping)
+    
+    const newTotal = lockedPrice + shipping
+    if (couponApplied) {
+      setPayableTotal(newTotal - couponApplied.discountAmount)
+    } else {
+      setPayableTotal(newTotal)
+    }
+  }, [form.country, lockedPrice, couponApplied])
 
   const handleAddressSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -141,12 +224,8 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
           setError('Live crypto is not configured yet. Please contact support before trying checkout.')
           return
         }
-        if (data.error === 'revolut_coming_soon') {
-          setError('Revolut Pro is not active yet. Please choose BTC, LTC, XMR, or SOL for now.')
-          return
-        }
         if (data.error === 'invalid_crypto_asset') {
-          setError('Please choose one of the supported coins: BTC, LTC, XMR, or SOL.')
+          setError('Please choose a supported coin: BTC.')
           return
         }
         setError('Could not reserve this unit. Please try again.')
@@ -164,8 +243,25 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
           finalAmount: Number(data.lockedPrice),
         })
       }
-      const meta = data.payment.meta as { asset: string; address: string; qrUrl: string }
-      setCryptoMeta(meta)
+      const meta = (data.payment?.meta || {}) as {
+        asset?: string
+        address?: string
+        qrUrl?: string
+        checkoutUrl?: string | null
+        clientSecret?: string
+      }
+      if (method === 'crypto') {
+        setStripeClientSecret(null)
+        setCryptoMeta({
+          asset: String(meta.asset || cryptoAsset),
+          address: String(meta.address || ''),
+          qrUrl: String(meta.qrUrl || ''),
+          checkoutUrl: meta.checkoutUrl ?? null,
+        })
+      } else {
+        setCryptoMeta(null)
+        setStripeClientSecret(meta.clientSecret ? String(meta.clientSecret) : null)
+      }
       trackEvent({ type: 'checkout_start', sessionId: getSessionId() })
       setStep('payment')
     } catch {
@@ -175,8 +271,9 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
     }
   }
 
-  const handleConfirm = async () => {
-    if (!reservationId || !paymentId) return
+  const handleConfirm = async (overridePaymentId?: string) => {
+    const paymentToConfirm = overridePaymentId || paymentId
+    if (!reservationId || !paymentToConfirm) return
     setLoading(true)
     setError(null)
     setStep('confirming')
@@ -186,7 +283,7 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           reservationId,
-          paymentId,
+          paymentId: paymentToConfirm,
           customerName: form.name,
           customerEmail: form.email,
           country: normalizeCountryCode(form.country),
@@ -313,6 +410,10 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
             <span className="text-slate-400">{phoneModel} (GrapheneOS)</span>
             <span className="text-white">€{lockedPrice}</span>
           </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">Shipping</span>
+            <span className="text-white">€{shippingCost}</span>
+          </div>
           {couponApplied && (
             <div className="flex justify-between">
               <span className="text-slate-400">Coupon {couponApplied.code}</span>
@@ -368,13 +469,29 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
           </div>
           <div>
             <label className="block text-sm text-slate-400 mb-1" htmlFor="phone">Phone (required for delivery)</label>
-            <input
-              id="phone"
-              required
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm focus:border-brand-500 focus:outline-none"
-            />
+            <div className="grid grid-cols-3 gap-2">
+              <select
+                value={form.country}
+                onChange={(e) => setForm({ ...form, country: e.target.value })}
+                className="col-span-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm focus:border-brand-500 focus:outline-none"
+                title="Select country to set phone prefix"
+              >
+                {Object.entries(EUROPE_SHIPPING_COUNTRIES).map(([code, name]) => (
+                  <option key={code} value={code}>
+                    {COUNTRY_CALLING_CODES[code] || '+' + code}
+                  </option>
+                ))}
+              </select>
+              <input
+                id="phone"
+                required
+                type="tel"
+                placeholder="1234567"
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                className="col-span-2 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm focus:border-brand-500 focus:outline-none"
+              />
+            </div>
           </div>
           <div>
             <label className="block text-sm text-slate-400 mb-1" htmlFor="company">Company (optional)</label>
@@ -483,17 +600,20 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
                 }`}
               >
                 <p className="text-white font-medium">Crypto</p>
-                <p className="text-xs text-slate-400 mt-1">BTC, LTC, XMR, SOL</p>
+                <p className="text-xs text-slate-400 mt-1">Bitcoin (BTC)</p>
               </button>
 
               <button
                 type="button"
-                disabled={REVOLUT_COMING_SOON}
-                onClick={() => setMethod('revolut_pro')}
-                className="border rounded-lg p-3 text-left border-slate-700 text-slate-500 cursor-not-allowed"
+                onClick={() => setMethod('stripe')}
+                className={`border rounded-lg p-3 text-left transition-colors ${
+                  method === 'stripe'
+                    ? 'border-brand-500 bg-brand-500/10'
+                    : 'border-slate-700 hover:border-slate-500'
+                }`}
               >
-                <p className="font-medium">Revolut Pro (Freelancer)</p>
-                <p className="text-xs mt-1">Coming soon</p>
+                <p className="text-white font-medium">Stripe</p>
+                <p className="text-xs text-slate-400 mt-1">Credit/Debit Card</p>
               </button>
             </div>
 
@@ -561,7 +681,7 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-brand-500 hover:bg-brand-400 disabled:opacity-60 text-white px-6 py-3 rounded-xl font-semibold transition-colors min-h-[44px]"
+            className="w-full bg-brand-500 hover:bg-brand-400 active:scale-95 disabled:opacity-60 text-white px-6 py-3 rounded-xl font-semibold transition-all min-h-[44px]"
           >
             {loading ? 'Reserving...' : `Continue to Payment - €${payableTotal}`}
           </button>
@@ -570,100 +690,151 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
 
       {/* Step: payment */}
       {step === 'payment' && (
-        <div className="space-y-5">
-          <h2 className="font-semibold text-white">
-            {cryptoMeta ? `${cryptoMeta.asset.toUpperCase()} Payment${IS_LIVE_MODE ? '' : ' (Sandbox)'}` : `Crypto Payment${IS_LIVE_MODE ? '' : ' (Sandbox)'}`}
-          </h2>
+        <div className="space-y-5 animate-fade-in">
+          {method === 'crypto' && (
+            <>
+              <h2 className="font-semibold text-white">
+                {cryptoMeta ? `${cryptoMeta.asset.toUpperCase()} Payment${IS_LIVE_MODE ? '' : ' (Sandbox)'}` : `Crypto Payment${IS_LIVE_MODE ? '' : ' (Sandbox)'}`}
+              </h2>
 
-          {cryptoMeta && cryptoPrices[cryptoAsset] && (
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-              {!IS_LIVE_MODE ? (
-                <div className="bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs rounded-lg p-3">
-                  <strong>Sandbox mode:</strong> Fake {cryptoMeta.asset.toUpperCase()} address — no real payment needed.
-                </div>
-              ) : (
-                <div className="bg-brand-500/10 border border-brand-500/30 text-brand-300 text-xs rounded-lg p-3">
-                  <strong>Live mode:</strong> Send the exact amount to the address below, then click verify.
+              {cryptoMeta && cryptoPrices[cryptoAsset] && (
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                  {!IS_LIVE_MODE ? (
+                    <div className="bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs rounded-lg p-3">
+                      <strong>Sandbox mode:</strong> Fake {cryptoMeta.asset.toUpperCase()} address — no real payment needed.
+                    </div>
+                  ) : (
+                    <div className="bg-brand-500/10 border border-brand-500/30 text-brand-300 text-xs rounded-lg p-3">
+                      <strong>Live mode:</strong> Send the exact amount to the address below, then click verify.
+                    </div>
+                  )}
+
+                  {/* Live price display */}
+                  <div className="bg-slate-800 rounded-lg p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 text-sm">Live {cryptoAsset.toUpperCase()} Price</span>
+                      <button
+                        type="button"
+                        onClick={refreshPrices}
+                        className="text-xs text-brand-400 hover:text-brand-300 transition-colors"
+                        title="Refresh prices"
+                      >
+                        🔄 Refresh
+                      </button>
+                    </div>
+                    {priceError && <span className="text-xs text-amber-500 block">⚠ Using fallback rate (live data unavailable)</span>}
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-2xl font-bold text-white">
+                        {cryptoPrices[cryptoAsset]?.symbol}
+                      </span>
+                      <span className="text-3xl font-semibold text-white">
+                        €{cryptoPrices[cryptoAsset]?.eur.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                      <span className="text-slate-400 text-sm">/coin</span>
+                    </div>
+
+                    {/* Amount to send */}
+                    <div className="border-t border-slate-700 pt-3 mt-3">
+                      <div className="text-slate-400 text-sm mb-2">You need to send:</div>
+                      <div className="flex items-baseline gap-2 bg-slate-900 rounded-lg p-3">
+                        <span className="text-2xl font-bold text-brand-400">
+                          {cryptoPrices[cryptoAsset]?.symbol}
+                        </span>
+                        <span className="text-2xl font-mono font-bold text-white">
+                          {(payableTotal / (cryptoPrices[cryptoAsset]?.eur || 1)).toFixed(8)}
+                        </span>
+                        <span className="text-slate-500 text-sm ml-auto">
+                          ≈ €{payableTotal}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col items-center gap-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={cryptoMeta.qrUrl} alt="Crypto QR code" className="w-40 h-40 rounded-lg" />
+                    <p className="text-slate-400 text-xs font-mono break-all text-center">
+                      {cryptoMeta.address}
+                    </p>
+                    {IS_LIVE_MODE && cryptoMeta.checkoutUrl && (
+                      <a
+                        href={cryptoMeta.checkoutUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-brand-400 hover:text-brand-300 underline"
+                      >
+                        Open BTCPay invoice page
+                      </a>
+                    )}
+                  </div>
+
+                  {!IS_LIVE_MODE ? (
+                    <button
+                      onClick={handleSimulateCrypto}
+                      disabled={loading}
+                      className="w-full bg-brand-500 hover:bg-brand-400 disabled:opacity-60 text-white px-6 py-3 rounded-xl font-semibold transition-colors min-h-[44px]"
+                    >
+                      {loading ? 'Confirming…' : `Simulate ${cryptoMeta.asset.toUpperCase()} Payment Confirmed`}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        void handleConfirm()
+                      }}
+                      disabled={loading}
+                      className="w-full bg-brand-500 hover:bg-brand-400 disabled:opacity-60 text-white px-6 py-3 rounded-xl font-semibold transition-colors min-h-[44px]"
+                    >
+                      {loading ? 'Verifying…' : 'I have sent payment - Verify now'}
+                    </button>
+                  )}
                 </div>
               )}
+            </>
+          )}
 
-              {/* Live price display */}
-              <div className="bg-slate-800 rounded-lg p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400 text-sm">Live {cryptoAsset.toUpperCase()} Price</span>
-                  <button
-                    type="button"
-                    onClick={refreshPrices}
-                    className="text-xs text-brand-400 hover:text-brand-300 transition-colors"
-                    title="Refresh prices"
-                  >
-                    🔄 Refresh
-                  </button>
-                </div>
-                {priceError && <span className="text-xs text-amber-500 block">⚠ Using fallback rate (live data unavailable)</span>}
-                <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-bold text-white">
-                    {cryptoPrices[cryptoAsset]?.symbol}
-                  </span>
-                  <span className="text-3xl font-semibold text-white">
-                    €{cryptoPrices[cryptoAsset]?.eur.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </span>
-                  <span className="text-slate-400 text-sm">/coin</span>
-                </div>
-
-                {/* Amount to send */}
-                <div className="border-t border-slate-700 pt-3 mt-3">
-                  <div className="text-slate-400 text-sm mb-2">You need to send:</div>
-                  <div className="flex items-baseline gap-2 bg-slate-900 rounded-lg p-3">
-                    <span className="text-2xl font-bold text-brand-400">
-                      {cryptoPrices[cryptoAsset]?.symbol}
-                    </span>
-                    <span className="text-2xl font-mono font-bold text-white">
-                      {(payableTotal / (cryptoPrices[cryptoAsset]?.eur || 1)).toFixed(8)}
-                    </span>
-                    <span className="text-slate-500 text-sm ml-auto">
-                      ≈ €{payableTotal}
-                    </span>
+          {method === 'stripe' && (
+            <>
+              <h2 className="font-semibold text-white">Card Payment</h2>
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                {!IS_LIVE_MODE ? (
+                  <div className="bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs rounded-lg p-3">
+                    <strong>Sandbox mode:</strong> Use test card 4242 4242 4242 4242, any expiry, any CVC.
                   </div>
-                </div>
-              </div>
-
-              <div className="flex flex-col items-center gap-3">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={cryptoMeta.qrUrl} alt="Crypto QR code" className="w-40 h-40 rounded-lg" />
-                <p className="text-slate-400 text-xs font-mono break-all text-center">
-                  {cryptoMeta.address}
-                </p>
-                {IS_LIVE_MODE && cryptoMeta.checkoutUrl && (
-                  <a
-                    href={cryptoMeta.checkoutUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-brand-400 hover:text-brand-300 underline"
+                ) : (
+                  <div className="bg-brand-500/10 border border-brand-500/30 text-brand-300 text-xs rounded-lg p-3">
+                    <strong>Live mode:</strong> Your payment is secure and processed via Stripe.
+                  </div>
+                )}
+                {stripePromise && stripeClientSecret ? (
+                  <Elements
+                    stripe={stripePromise}
+                    options={{
+                      clientSecret: stripeClientSecret,
+                      appearance: {
+                        theme: 'night',
+                      },
+                    }}
                   >
-                    Open BTCPay invoice page
-                  </a>
+                    <StripePaymentPanel
+                      amount={payableTotal}
+                      clientSecret={stripeClientSecret}
+                      loading={loading}
+                      onError={setError}
+                      onPaid={async (intentId) => {
+                        setPaymentId(intentId)
+                        await handleConfirm(intentId)
+                      }}
+                    />
+                  </Elements>
+                ) : (
+                  <div className="bg-slate-800 rounded-lg p-4 min-h-[200px] flex items-center justify-center">
+                    <p className="text-slate-400 text-sm text-center">
+                      Unable to load Stripe form. Please check Stripe keys and try again.
+                    </p>
+                  </div>
                 )}
               </div>
-
-              {!IS_LIVE_MODE ? (
-                <button
-                  onClick={handleSimulateCrypto}
-                  disabled={loading}
-                  className="w-full bg-brand-500 hover:bg-brand-400 disabled:opacity-60 text-white px-6 py-3 rounded-xl font-semibold transition-colors min-h-[44px]"
-                >
-                  {loading ? 'Confirming…' : `Simulate ${cryptoMeta.asset.toUpperCase()} Payment Confirmed`}
-                </button>
-              ) : (
-                <button
-                  onClick={handleConfirm}
-                  disabled={loading}
-                  className="w-full bg-brand-500 hover:bg-brand-400 disabled:opacity-60 text-white px-6 py-3 rounded-xl font-semibold transition-colors min-h-[44px]"
-                >
-                  {loading ? 'Verifying…' : 'I have sent payment - Verify now'}
-                </button>
-              )}
-            </div>
+            </>
           )}
         </div>
       )}

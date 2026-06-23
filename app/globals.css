@@ -37,3 +37,19 @@ body {
   border-color: rgba(148, 163, 184, 0.45);
   box-shadow: 0 10px 28px rgba(2, 6, 23, 0.35);
 }
+
+/* Fade transition for content */
+.fade-transition {
+  animation: fadeInTransition 0.3s ease-out;
+}
+
+@keyframes fadeInTransition {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

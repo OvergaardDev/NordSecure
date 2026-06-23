@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { prisma } from '@/src/lib/prisma'
 
 export const metadata: Metadata = { title: 'Orders | Admin' }
+export const revalidate = 0 // Always fetch fresh data
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
@@ -14,12 +15,23 @@ const STATUS_COLORS: Record<string, string> = {
 export default async function AdminOrdersPage() {
   const orders = await prisma.order.findMany({
     orderBy: { createdAt: 'desc' },
-    include: { items: true },
+    take: 200,
+    select: {
+      id: true,
+      orderNumber: true,
+      customerName: true,
+      country: true,
+      totalAmount: true,
+      status: true,
+      isTest: true,
+      createdAt: true,
+    },
   })
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-white">Orders</h1>
+      <p className="text-xs text-slate-500">Showing latest 200 orders for faster loading.</p>
 
       <div className="table-responsive rounded-xl border border-slate-800 overflow-hidden">
         <table className="w-full text-sm min-w-[700px]">

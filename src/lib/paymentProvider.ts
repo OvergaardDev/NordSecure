@@ -1,5 +1,7 @@
+import Stripe from 'stripe'
+
 export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded'
-export type CryptoAsset = 'btc' | 'ltc' | 'xmr' | 'sol'
+export type CryptoAsset = 'btc'
 
 export type PaymentResult = {
   id: string
@@ -25,16 +27,12 @@ function randomToken(length: number): string {
 
 function buildSandboxAddress(asset: CryptoAsset): string {
   if (asset === 'btc') return `bc1qmock${randomToken(20)}`
-  if (asset === 'ltc') return `ltc1qmock${randomToken(20)}`
-  if (asset === 'xmr') return `4mockxmr${randomToken(28)}`
-  return `So1mock${randomToken(24)}`
+  return `bc1qmock${randomToken(20)}`
 }
 
 function qrScheme(asset: CryptoAsset): string {
   if (asset === 'btc') return 'bitcoin'
-  if (asset === 'ltc') return 'litecoin'
-  if (asset === 'xmr') return 'monero'
-  return 'solana'
+  return 'bitcoin'
 }
 
 export interface PaymentProvider {
@@ -53,9 +51,7 @@ function isLiveMode() {
 
 function btcpayAssetCode(asset: CryptoAsset): string {
   if (asset === 'btc') return 'BTC'
-  if (asset === 'ltc') return 'LTC'
-  if (asset === 'xmr') return 'XMR'
-  return 'SOL'
+  return 'BTC'
 }
 
 function buildQrUrl(asset: CryptoAsset, address: string) {
@@ -103,7 +99,7 @@ export class BTCPayProvider implements PaymentProvider {
     metadata?: Record<string, unknown>
   ): Promise<PaymentResult> {
     const rawAsset = String(metadata?.asset ?? 'btc').toLowerCase()
-    const asset = (['btc', 'ltc', 'xmr', 'sol'].includes(rawAsset) ? rawAsset : 'btc') as CryptoAsset
+    const asset = (['btc'].includes(rawAsset) ? rawAsset : 'btc') as CryptoAsset
     const method = btcpayAssetCode(asset)
     const reservationId = String(metadata?.reservationId ?? '')
 
@@ -217,6 +213,75 @@ export class StripeDemo implements PaymentProvider {
   }
 }
 
+export class StripeProvider implements PaymentProvider {
+  private stripe: Stripe
+
+  constructor() {
+    const secretKey = String(process.env.STRIPE_SECRET_KEY || '')
+    this.stripe = new Stripe(secretKey, {
+      apiVersion: '2023-10-16',
+    })
+  }
+
+  static isConfigured() {
+    return Boolean(process.env.STRIPE_SECRET_KEY)
+  }
+
+  private toPaymentStatus(status: string): PaymentStatus {
+    if (status === 'succeeded' || status === 'requires_capture') return 'paid'
+    if (status === 'canceled') return 'failed'
+    return 'pending'
+  }
+
+  async createPayment(
+    amount: number,
+    currency = 'EUR',
+    metadata?: Record<string, unknown>
+  ): Promise<PaymentResult> {
+    const amountInMinor = Math.round(amount * 100)
+    const intent = await this.stripe.paymentIntents.create({
+      amount: amountInMinor,
+      currency: currency.toLowerCase(),
+      automatic_payment_methods: { enabled: true },
+      metadata: Object.fromEntries(
+        Object.entries(metadata || {}).map(([k, v]) => [k, String(v)])
+      ),
+    })
+
+    return {
+      id: intent.id,
+      method: 'stripe',
+      amount,
+      currency,
+      status: this.toPaymentStatus(intent.status),
+      isTest: !String(process.env.STRIPE_SECRET_KEY || '').startsWith('sk_live_'),
+      meta: {
+        clientSecret: intent.client_secret,
+      },
+    }
+  }
+
+  async verifyPayment(id: string): Promise<PaymentResult | null> {
+    const intent = await this.stripe.paymentIntents.retrieve(id)
+    return {
+      id: intent.id,
+      method: 'stripe',
+      amount: (intent.amount || 0) / 100,
+      currency: String(intent.currency || 'eur').toUpperCase(),
+      status: this.toPaymentStatus(intent.status),
+      isTest: !String(process.env.STRIPE_SECRET_KEY || '').startsWith('sk_live_'),
+      meta: {
+        stripeStatus: intent.status,
+      },
+    }
+  }
+
+  async refundPayment(id: string): Promise<boolean> {
+    await this.stripe.refunds.create({ payment_intent: id })
+    return true
+  }
+}
+
 /**
  * Crypto sandbox — generates a fake address + QR.
  * Replace this class body with BTCPay Server API calls to go live.
@@ -229,7 +294,7 @@ export class CryptoSandbox implements PaymentProvider {
     metadata?: Record<string, unknown>
   ): Promise<PaymentResult> {
     const rawAsset = String(metadata?.asset ?? 'btc').toLowerCase()
-    const asset = (['btc', 'ltc', 'xmr', 'sol'].includes(rawAsset) ? rawAsset : 'btc') as CryptoAsset
+    const asset = (['btc'].includes(rawAsset) ? rawAsset : 'btc') as CryptoAsset
     const id = `crypto_mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     const fakeAddress = buildSandboxAddress(asset)
     const scheme = qrScheme(asset)
@@ -275,6 +340,14 @@ export function getCryptoProvider(): PaymentProvider {
   }
 
   return new CryptoSandbox()
+}
+
+export function getStripeProvider(): PaymentProvider {
+  if (StripeProvider.isConfigured()) {
+    return new StripeProvider()
+  }
+
+  return new StripeDemo()
 }
 
 export function isLivePaymentMode() {

@@ -8,12 +8,43 @@ interface Props {
   params: { slug: string }
 }
 
+function parseFrontmatter(content: string) {
+  const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/)
+  if (!match) {
+    return { seoTitle: '', seoDescription: '', canonicalUrl: '', body: content }
+  }
+
+  const meta: Record<string, string> = {}
+  for (const line of match[1].split('\n')) {
+    const separatorIndex = line.indexOf(':')
+    if (separatorIndex === -1) continue
+    const key = line.slice(0, separatorIndex).trim()
+    const value = line.slice(separatorIndex + 1).trim()
+    meta[key] = value
+  }
+
+  return {
+    seoTitle: meta.seoTitle ?? '',
+    seoDescription: meta.seoDescription ?? '',
+    canonicalUrl: meta.canonicalUrl ?? '',
+    seoKeywords: meta.seoKeywords ?? '',
+    body: match[2],
+  }
+}
+
+function isHtmlContent(content: string) {
+  return /<([a-z][\w-]*)(\s[^>]*)?>/i.test(content) || /&[a-z]+;/.test(content)
+}
+
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const post = await prisma.post.findUnique({ where: { slug: params.slug } })
   if (!post) return {}
+  const seo = parseFrontmatter(post.content)
   return {
-    title: post.title,
-    description: post.excerpt ?? undefined,
+    title: seo.seoTitle || post.title,
+    description: seo.seoDescription || post.excerpt || undefined,
+    keywords: seo.seoKeywords ? seo.seoKeywords.split(',').map((keyword) => keyword.trim()).filter(Boolean) : undefined,
+    alternates: seo.canonicalUrl ? { canonical: seo.canonicalUrl } : undefined,
   }
 }
 
@@ -23,7 +54,8 @@ export default async function BlogPostPage({ params }: Props) {
   })
   if (!post) return notFound()
 
-  const html = marked(post.content)
+  const seo = parseFrontmatter(post.content)
+  const html = isHtmlContent(seo.body) ? seo.body : marked.parse(seo.body, { breaks: true })
 
   return (
     <article className="max-w-2xl mx-auto">

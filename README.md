@@ -70,6 +70,37 @@ The app will be available at http://localhost:3000.
 
 ---
 
+## Production deploy
+
+The live site is proxied to the Next.js server on port 3000 and managed by PM2.
+
+On the server, the deploy flow is:
+
+```bash
+cd /var/www/nordsecure
+git pull --ff-only
+npm ci
+npx prisma generate
+npx prisma migrate deploy || npx prisma db push
+npm run build
+pm2 startOrReload ecosystem.config.js --update-env
+pm2 save
+```
+
+Relevant files:
+
+- PM2 config: [ecosystem.config.js](ecosystem.config.js)
+- Deploy script: [deploy/deploy.sh](deploy/deploy.sh)
+- Nginx proxy: [deploy/nordsecure.nginx.conf](deploy/nordsecure.nginx.conf)
+
+Verification:
+
+1. Open the domain in a browser and confirm the homepage loads.
+2. Visit `/admin/posts/new` and confirm the editor appears.
+3. If the site still shows old content, restart the PM2 app and reload Nginx if needed.
+
+---
+
 ## Production deployment files
 
 - PM2 process file: `ecosystem.config.js`
