@@ -10,6 +10,10 @@ if [ ! -f .env ] && [ -f .env.example ]; then
 	cp .env.example .env
 fi
 
+if ! grep -q '^DATABASE_URL=' .env 2>/dev/null; then
+	printf '\nDATABASE_URL="file:./prisma/dev.db"\n' >> .env
+fi
+
 echo "[1/7] Pull latest code"
 git pull --ff-only
 
