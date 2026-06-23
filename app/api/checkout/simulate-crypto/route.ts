@@ -1,14 +1,17 @@
 import { NextResponse } from 'next/server'
-import { markCryptoPaymentPaid } from '@/src/lib/simulatedCryptoPayments'
-import { isLivePaymentMode } from '@/src/lib/paymentProvider'
+import { parseSimulateCryptoPaymentCommand, simulateCryptoPayment } from '@/src/server/storefront/service'
+import { RouteError } from '@/src/server/routeErrors'
 
 export async function POST(req: Request) {
-  if (isLivePaymentMode()) {
-    return NextResponse.json({ error: 'disabled_in_live_mode' }, { status: 403 })
+  try {
+    const body = await req.json().catch(() => {
+      throw new RouteError(400, 'invalid_payload')
+    })
+    return NextResponse.json(simulateCryptoPayment(parseSimulateCryptoPaymentCommand(body)))
+  } catch (error) {
+    if (error instanceof RouteError) {
+      return NextResponse.json({ error: error.code }, { status: error.status })
+    }
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 })
   }
-
-  const { paymentId } = await req.json()
-  if (!paymentId) return NextResponse.json({ error: 'missing paymentId' }, { status: 400 })
-  markCryptoPaymentPaid(paymentId)
-  return NextResponse.json({ ok: true, paymentId })
 }

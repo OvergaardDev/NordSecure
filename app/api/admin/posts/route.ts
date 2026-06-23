@@ -1,28 +1,21 @@
 import { NextResponse } from 'next/server'
-import { prisma } from '@/src/lib/prisma'
+import { createPost, listPosts, parsePostCreateCommand } from '@/src/server/admin/service'
+import { RouteError } from '@/src/server/routeErrors'
 
 export async function GET() {
-  const posts = await prisma.post.findMany({ orderBy: { createdAt: 'desc' } })
-  return NextResponse.json(posts)
+  return NextResponse.json(await listPosts())
 }
 
 export async function POST(req: Request) {
-  const body = await req.json()
-  const { title, slug, content, excerpt, tags, status, featuredImage } = body
-  if (!title || !slug || !content) {
-    return NextResponse.json({ error: 'title, slug, content required' }, { status: 400 })
+  try {
+    const body = await req.json().catch(() => {
+      throw new RouteError(400, 'invalid_payload')
+    })
+    return NextResponse.json(await createPost(parsePostCreateCommand(body)), { status: 201 })
+  } catch (error) {
+    if (error instanceof RouteError) {
+      return NextResponse.json({ error: error.code }, { status: error.status })
+    }
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 })
   }
-  const post = await prisma.post.create({
-    data: {
-      title,
-      slug,
-      content,
-      excerpt,
-      tags: tags ?? null,
-      status: status ?? 'draft',
-      featuredImage: featuredImage ?? null,
-      publishedAt: status === 'published' ? new Date() : null,
-    },
-  })
-  return NextResponse.json(post, { status: 201 })
 }

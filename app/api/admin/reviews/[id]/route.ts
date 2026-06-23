@@ -1,22 +1,21 @@
 import { NextResponse } from 'next/server'
-import { prisma } from '@/src/lib/prisma'
+import { parseReviewStatusUpdateCommand, updateReviewStatus } from '@/src/server/admin/service'
+import { parseRouteId } from '@/src/server/input'
+import { RouteError } from '@/src/server/routeErrors'
 
 interface Params { params: { id: string } }
 
-function parseRouteId(rawId: string) {
-  const id = Number.parseInt(rawId, 10)
-  return Number.isInteger(id) && id > 0 ? id : null
-}
-
 export async function POST(req: Request, { params }: Params) {
-  const id = parseRouteId(params.id)
-  if (!id) return NextResponse.json({ error: 'invalid_id' }, { status: 400 })
-
-  const body = await req.json().catch(() => null)
-  const formData = body ?? Object.fromEntries(new URLSearchParams())
-  const status = body?.status ?? formData?.status
-  const valid = ['pending', 'approved', 'rejected']
-  if (!valid.includes(status)) return NextResponse.json({ error: 'invalid' }, { status: 400 })
-  const review = await prisma.review.update({ where: { id }, data: { status } })
-  return NextResponse.json(review)
+  try {
+    const body = await req.json().catch(() => {
+      throw new RouteError(400, 'invalid_payload')
+    })
+    const command = parseReviewStatusUpdateCommand(body)
+    return NextResponse.json(await updateReviewStatus(parseRouteId(params.id), command.status))
+  } catch (error) {
+    if (error instanceof RouteError) {
+      return NextResponse.json({ error: error.code }, { status: error.status })
+    }
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 })
+  }
 }

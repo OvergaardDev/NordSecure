@@ -1,10 +1,6 @@
 import { NextResponse } from 'next/server'
-import { prisma } from '@/src/lib/prisma'
+import { listOrders } from '@/src/server/admin/service'
 
 export async function GET() {
-  const orders = await prisma.order.findMany({
-    orderBy: { createdAt: 'desc' },
-    include: { items: true },
-  })
-  return NextResponse.json(orders)
+  return NextResponse.json(await listOrders())
 }
