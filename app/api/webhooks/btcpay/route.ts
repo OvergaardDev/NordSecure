@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'crypto'
 import { NextResponse } from 'next/server'
 import { prisma } from '@/src/lib/prisma'
+import { isLivePaymentModeServer } from '@/src/lib/runtimeMode'
 
 function verifySignature(rawBody: string, signatureHeader: string | null, secret: string) {
   if (!signatureHeader) return false
@@ -18,7 +19,7 @@ export async function POST(req: Request) {
   const rawBody = await req.text()
   const secret = String(process.env.BTCPAY_WEBHOOK_SECRET || '')
   const signature = req.headers.get('btcpay-sig') || req.headers.get('BTCPay-Sig')
-  const isLiveMode = process.env.NEXT_PUBLIC_PAYMENT_MODE === 'live'
+  const isLiveMode = isLivePaymentModeServer()
 
   if (isLiveMode && !secret) {
     return NextResponse.json({ error: 'webhook_not_configured' }, { status: 503 })

@@ -11,6 +11,7 @@ import {
   getStringField,
   requireRecord,
 } from '@/src/server/input'
+import { countAnalyticsEventsByType } from '@/src/shared/analyticsEvents'
 
 const ORDER_STATUSES = ['pending', 'paid', 'shipped', 'cancelled'] as const
 const REVIEW_STATUSES = ['pending', 'approved', 'rejected'] as const
@@ -421,10 +422,11 @@ export async function getAnalytics(query: { includeTest: boolean; since: Date })
     revenueMap.set(day, (revenueMap.get(day) ?? 0) + order.totalAmount)
   }
 
-  const pageViews = events.filter((event) => event.type === 'page_view').length
-  const productViews = events.filter((event) => event.type === 'product_view').length
-  const checkoutStarts = events.filter((event) => event.type === 'checkout_start').length
-  const purchases = events.filter((event) => event.type === 'purchase').length
+  const counts = countAnalyticsEventsByType(events)
+  const pageViews = counts.page_view
+  const productViews = counts.product_view
+  const checkoutStarts = counts.checkout_start
+  const purchases = counts.purchase
 
   const countryMap = new Map<string, number>()
   for (const order of paidOrders) {

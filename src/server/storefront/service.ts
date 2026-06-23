@@ -6,6 +6,7 @@ import { markCryptoPaymentPaid } from '@/src/lib/simulatedCryptoPayments'
 import { isLivePaymentMode } from '@/src/lib/paymentProvider'
 import { RouteError } from '@/src/server/routeErrors'
 import { getOptionalStringField, getPositiveIntegerField, getStringField, requireRecord } from '@/src/server/input'
+import { AnalyticsEventType, isAnalyticsEventType } from '@/src/shared/analyticsEvents'
 
 const COIN_IDS: Record<string, string> = {
   btc: 'bitcoin',
@@ -59,16 +60,34 @@ export async function getCampaignStateResponse() {
 
 export function parseEventCommand(payload: unknown) {
   const body = requireRecord(payload)
+  const type = getStringField(body, 'type', { required: true })
+  const sessionId = getStringField(body, 'sessionId', { required: true })
+  const country = getOptionalStringField(body, 'country')
+  const referrer = getOptionalStringField(body, 'referrer')
+
+  if (!isAnalyticsEventType(type)) {
+    throw new RouteError(400, 'invalid_event_type')
+  }
+  if (sessionId.length < 8 || sessionId.length > 128) {
+    throw new RouteError(400, 'invalid_session_id')
+  }
+  if (country && !/^[A-Z]{2}$/i.test(country)) {
+    throw new RouteError(400, 'invalid_country')
+  }
+  if (referrer && referrer.length > 1024) {
+    throw new RouteError(400, 'invalid_referrer')
+  }
+
   return {
-    type: getStringField(body, 'type', { required: true }),
-    sessionId: getStringField(body, 'sessionId', { required: true }),
-    country: getOptionalStringField(body, 'country'),
-    referrer: getOptionalStringField(body, 'referrer'),
+    type,
+    sessionId,
+    country: country?.toUpperCase(),
+    referrer,
   }
 }
 
 export async function recordEvent(command: {
-  type: string
+  type: AnalyticsEventType
   sessionId: string
   country?: string
   referrer?: string

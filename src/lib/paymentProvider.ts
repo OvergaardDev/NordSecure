@@ -1,4 +1,5 @@
 import Stripe from 'stripe'
+import { isLivePaymentModeServer } from '@/src/lib/runtimeMode'
 
 export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded'
 export type CryptoAsset = 'btc'
@@ -47,7 +48,7 @@ export interface PaymentProvider {
 }
 
 function isLiveMode() {
-  return process.env.NEXT_PUBLIC_PAYMENT_MODE === 'live'
+  return isLivePaymentModeServer()
 }
 
 function btcpayAssetCode(asset: CryptoAsset): string {

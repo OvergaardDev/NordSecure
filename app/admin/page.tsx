@@ -3,6 +3,7 @@ import { prisma } from '@/src/lib/prisma'
 import { getCampaignState, campaignPrices } from '@/src/lib/campaign'
 import { includeTestOrdersForStorefront, soldCountWhere } from '@/src/lib/sales'
 import { AnalyticsCharts } from '@/components/admin/AnalyticsCharts'
+import { buildAnalyticsFunnel, countAnalyticsEventsByType } from '@/src/shared/analyticsEvents'
 
 export const metadata: Metadata = { title: 'Admin Overview' }
 
@@ -49,17 +50,10 @@ async function getAnalytics(range: DateRange) {
   const methods = Array.from(methodMap.entries()).map(([method, count]) => ({ method, count }))
 
   // Funnel from events
-  const pageViews = events.filter((e) => e.type === 'page_view').length
-  const productViews = events.filter((e) => e.type === 'product_view').length
-  const checkoutStarts = events.filter((e) => e.type === 'checkout_start').length
-  const purchases = events.filter((e) => e.type === 'purchase').length
-
-  const funnel = [
-    { step: 'Page views', count: pageViews },
-    { step: 'Product views', count: productViews },
-    { step: 'Checkout starts', count: checkoutStarts },
-    { step: 'Purchases', count: purchases },
-  ]
+  const funnelCounts = countAnalyticsEventsByType(events)
+  const pageViews = funnelCounts.page_view
+  const purchases = funnelCounts.purchase
+  const funnel = buildAnalyticsFunnel(events)
 
   const paidOrders = orders.filter((o) => o.status === 'paid' && !o.isTest)
   const totalRevenue = paidOrders.reduce((s, o) => s + o.totalAmount, 0)

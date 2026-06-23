@@ -1,11 +1,7 @@
-export type EventType =
-  | 'page_view'
-  | 'product_view'
-  | 'checkout_start'
-  | 'purchase'
+import type { AnalyticsEventType } from '@/src/shared/analyticsEvents'
 
 export interface TrackEventPayload {
-  type: EventType
+  type: AnalyticsEventType
   sessionId: string
   country?: string
   referrer?: string

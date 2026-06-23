@@ -1,12 +1,20 @@
 import { prisma } from '@/src/lib/prisma'
-import { priceForOrder } from '@/src/lib/campaign'
 import { getCryptoProvider, getStripeProvider, isLivePaymentMode } from '@/src/lib/paymentProvider'
 import { includeTestOrdersForStorefront, soldCountWhere } from '@/src/lib/sales'
 import { validateCouponForAmount } from '@/src/lib/coupons'
 import { calculateShippingCost, normalizeCountryCode } from '@/src/lib/shipping'
 import { isCryptoPaymentPaid } from '@/src/lib/simulatedCryptoPayments'
 import { sendOrderConfirmation } from '@/src/lib/email'
-import { RouteError, requireRecord } from '@/src/server/routeErrors'
+import { RouteError } from '@/src/server/routeErrors'
+import {
+  getOptionalStringField,
+  getPositiveIntegerField,
+  getStringField,
+  requireRecord,
+} from '@/src/server/input'
+import { buildOrderItemLines, calculateReservedProductSubtotal } from '@/src/server/checkout/pricing'
+import { createOrderWithGeneratedNumber } from '@/src/server/checkout/orderNumbers'
+import { isReservationExpired, paymentMatchesReservation } from '@/src/server/checkout/invariants'
 
 const CRYPTO_ASSETS = new Set(['btc'])
 
@@ -43,34 +51,6 @@ export type ConfirmPaymentCommand = {
   recipientTaxId?: string
 }
 
-function getStringField(body: Record<string, unknown>, key: string, options?: { required?: boolean }) {
-  const raw = body[key]
-  const value = typeof raw === 'string' ? raw.trim() : ''
-
-  if (options?.required && !value) {
-    throw new RouteError(400, 'invalid_input', { field: key })
-  }
-
-  return value
-}
-
-function getOptionalStringField(body: Record<string, unknown>, key: string) {
-  const value = getStringField(body, key)
-  return value || undefined
-}
-
-function getPositiveIntegerField(body: Record<string, unknown>, key: string, defaultValue?: number) {
-  const raw = body[key]
-  if ((raw == null || raw === '') && defaultValue != null) return defaultValue
-
-  const value = Number(raw)
-  if (!Number.isInteger(value) || value < 1) {
-    throw new RouteError(400, 'invalid_input', { field: key })
-  }
-
-  return value
-}
-
 function mapProviderError(error: unknown): never {
   if (error instanceof Error && error.message === 'btcpay_not_configured') {
     throw new RouteError(500, 'live_crypto_not_configured')
@@ -80,20 +60,6 @@ function mapProviderError(error: unknown): never {
   }
 
   throw new RouteError(500, 'payment_provider_error')
-}
-
-function paymentMatchesReservation(
-  reservation: { id: number; lockedPrice: number; paymentId: string | null },
-  verified: { amount: number; currency: string; meta?: Record<string, unknown> } | null
-) {
-  if (!verified) return false
-
-  const amountMatches = Math.abs(Number(verified.amount || 0) - Number(reservation.lockedPrice)) < 0.01
-  const currencyMatches = String(verified.currency || '').toUpperCase() === 'EUR'
-  const verifiedReservationId = String(verified.meta?.reservationId || '')
-  const reservationIdMatches = !verifiedReservationId || verifiedReservationId === String(reservation.id)
-
-  return amountMatches && currencyMatches && reservationIdMatches
 }
 
 export function parseCreateReservationCommand(payload: unknown): CreateReservationCommand {
@@ -148,53 +114,89 @@ export function parseConfirmPaymentCommand(payload: unknown): ConfirmPaymentComm
 }
 
 export async function createReservation(command: CreateReservationCommand) {
-  const soldCount = await prisma.order.count({
-    where: soldCountWhere(includeTestOrdersForStorefront()),
-  })
-  const reservedIndex = soldCount
-  const baseLockedPrice = priceForOrder(reservedIndex)
+  const now = new Date()
 
-  let appliedCouponCode: string | null = null
-  let discountAmount = 0
-  let productTotal = baseLockedPrice
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.reservation.deleteMany({ where: { expiresAt: { lt: now } } })
 
-  if (command.couponCode) {
-    const couponCheck = await validateCouponForAmount(command.couponCode, baseLockedPrice)
-    if (!couponCheck.ok) {
-      throw new RouteError(400, 'invalid_coupon', { reason: couponCheck.reason })
+    const product = await tx.product.findUnique({ where: { sku: command.productSku } })
+    if (!product) throw new RouteError(404, 'product_not_found')
+    if (!product.isActive) throw new RouteError(409, 'product_inactive')
+    if (command.quantity > product.maxPerOrder) throw new RouteError(400, 'invalid_quantity')
+
+    const soldUnitsAgg = await tx.orderItem.aggregate({
+      _sum: { quantity: true },
+      where: {
+        productId: product.id,
+        order: soldCountWhere(includeTestOrdersForStorefront()),
+      },
+    })
+    const soldUnits = soldUnitsAgg._sum.quantity ?? 0
+
+    const reservedUnitsAgg = await tx.reservation.aggregate({
+      _sum: { quantity: true },
+      where: {
+        productId: product.id,
+        expiresAt: { gte: now },
+      },
+    })
+    const reservedUnits = reservedUnitsAgg._sum.quantity ?? 0
+
+    if (soldUnits + reservedUnits + command.quantity > product.standardStock) {
+      throw new RouteError(409, 'out_of_stock')
     }
-    appliedCouponCode = couponCheck.code || null
-    discountAmount = couponCheck.discountAmount || 0
-    productTotal = couponCheck.finalAmount || baseLockedPrice
-  }
 
-  const normalizedCountry = normalizeCountryCode(command.country)
-  const shippingCost = calculateShippingCost(normalizedCountry)
-  const lockedPrice = productTotal + shippingCost
+    const reservedIndex = soldUnits + reservedUnits
+    const productSubtotal = calculateReservedProductSubtotal(reservedIndex, command.quantity)
 
-  const product = await prisma.product.findUnique({ where: { sku: command.productSku } })
-  if (!product) throw new RouteError(404, 'product_not_found')
-  if (!product.isActive) throw new RouteError(409, 'product_inactive')
-  if (command.quantity > product.maxPerOrder) throw new RouteError(400, 'invalid_quantity')
-  if (soldCount + command.quantity > product.standardStock) throw new RouteError(409, 'out_of_stock')
+    let appliedCouponCode: string | null = null
+    let discountAmount = 0
+    let discountedProductTotal = productSubtotal
 
-  const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
-  const reservation = await prisma.reservation.create({
-    data: {
-      productSku: command.productSku,
-      paymentMethod: command.paymentMethod,
-      paymentAsset: command.paymentAsset || '',
-      paymentStatus: 'pending',
+    if (command.couponCode) {
+      const couponCheck = await validateCouponForAmount(command.couponCode, productSubtotal)
+      if (!couponCheck.ok) {
+        throw new RouteError(400, 'invalid_coupon', { reason: couponCheck.reason })
+      }
+      appliedCouponCode = couponCheck.code || null
+      discountAmount = couponCheck.discountAmount || 0
+      discountedProductTotal = couponCheck.finalAmount || productSubtotal
+    }
+
+    const normalizedCountry = normalizeCountryCode(command.country)
+    const shippingCost = calculateShippingCost(normalizedCountry)
+    const lockedPrice = discountedProductTotal + shippingCost
+
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
+    const reservation = await tx.reservation.create({
+      data: {
+        productSku: command.productSku,
+        paymentMethod: command.paymentMethod,
+        paymentAsset: command.paymentAsset ?? null,
+        paymentStatus: 'pending',
+        lockedPrice,
+        couponCode: appliedCouponCode,
+        discountAmount,
+        sessionId: command.sessionId || 'anon',
+        quantity: command.quantity,
+        productId: product.id,
+        expiresAt,
+        reservedIndex,
+      },
+    })
+
+    return {
+      reservation,
       lockedPrice,
-      couponCode: appliedCouponCode,
+      discountedProductTotal,
+      shippingCost,
+      normalizedCountry,
+      appliedCouponCode,
       discountAmount,
-      sessionId: command.sessionId || 'anon',
-      quantity: command.quantity,
-      productId: product.id,
-      expiresAt,
-      reservedIndex,
-    },
+    }
   })
+
+  const { reservation, lockedPrice, discountedProductTotal, shippingCost, normalizedCountry, appliedCouponCode, discountAmount } = result
 
   try {
     const payment = command.paymentMethod === 'crypto'
@@ -206,7 +208,7 @@ export async function createReservation(command: CreateReservationCommand) {
           reservationId: reservation.id,
           country: normalizedCountry,
           shippingCost,
-          productTotal,
+          productTotal: discountedProductTotal,
         })
 
     await prisma.reservation.update({
@@ -217,7 +219,7 @@ export async function createReservation(command: CreateReservationCommand) {
     return {
       reservationId: reservation.id,
       lockedPrice,
-      productTotal,
+      productTotal: discountedProductTotal,
       shippingCost,
       payment,
       coupon: appliedCouponCode
@@ -238,7 +240,7 @@ export async function confirmPayment(command: ConfirmPaymentCommand) {
   const reservation = await prisma.reservation.findUnique({ where: { id: command.reservationId } })
 
   if (!reservation) throw new RouteError(404, 'reservation_not_found')
-  if (reservation.expiresAt.getTime() < Date.now()) {
+  if (isReservationExpired(reservation)) {
     throw new RouteError(410, 'reservation_expired')
   }
   if (!reservation.paymentId || reservation.paymentId !== command.paymentId) {
@@ -269,57 +271,92 @@ export async function confirmPayment(command: ConfirmPaymentCommand) {
   const product = await prisma.product.findUnique({ where: { id: reservation.productId } })
 
   const result = await prisma.$transaction(async (tx) => {
-    const soldCount = await tx.order.count({
-      where: soldCountWhere(includeTestOrdersForStorefront()),
+    const soldUnitsAgg = await tx.orderItem.aggregate({
+      _sum: { quantity: true },
+      where: {
+        productId: reservation.productId,
+        order: soldCountWhere(includeTestOrdersForStorefront()),
+      },
     })
-    if (soldCount > reservation.reservedIndex) {
-      return { error: 'price_changed', newSoldCount: soldCount }
+    const soldUnits = soldUnitsAgg._sum.quantity ?? 0
+    if (soldUnits > reservation.reservedIndex) {
+      return { error: 'price_changed', newSoldCount: soldUnits }
     }
 
-    const order = await tx.order.create({
-      data: {
-        orderNumber: `ORD-${Date.now()}`,
-        paymentMethod: reservation.paymentMethod,
-        paymentAsset: reservation.paymentAsset,
-        couponCode: reservation.couponCode,
-        discountAmount: reservation.discountAmount,
-        customerName: command.customerName,
-        customerEmail: command.customerEmail,
-        shippingPhone: command.shippingPhone,
-        shippingCompany: command.shippingCompany,
-        shippingAddressLine1: command.shippingAddressLine1,
-        shippingAddressLine2: command.shippingAddressLine2,
-        shippingCity: command.shippingCity,
-        shippingRegion: command.shippingRegion,
-        shippingPostalCode: command.shippingPostalCode,
-        deliveryInstructions: command.deliveryInstructions,
-        recipientTaxId: command.recipientTaxId,
-        country: normalizedCountry,
-        vatAmount: 0,
-        totalAmount: reservation.lockedPrice,
-        isTest: !liveMode,
-        status: 'paid',
-        items: {
-          create: {
-            productId: reservation.productId,
-            quantity: reservation.quantity,
-            unitPrice: reservation.lockedPrice,
-          },
-        },
+    const orderItemLines = buildOrderItemLines(
+      reservation.productId,
+      reservation.quantity,
+      reservation.lockedPrice
+    )
+
+    const order = await createOrderWithGeneratedNumber(tx, (orderNumber) => ({
+      orderNumber,
+      paymentMethod: reservation.paymentMethod,
+      paymentAsset: reservation.paymentAsset,
+      couponCode: reservation.couponCode,
+      discountAmount: reservation.discountAmount,
+      customerName: command.customerName,
+      customerEmail: command.customerEmail,
+      shippingPhone: command.shippingPhone,
+      shippingCompany: command.shippingCompany,
+      shippingAddressLine1: command.shippingAddressLine1,
+      shippingAddressLine2: command.shippingAddressLine2,
+      shippingCity: command.shippingCity,
+      shippingRegion: command.shippingRegion,
+      shippingPostalCode: command.shippingPostalCode,
+      deliveryInstructions: command.deliveryInstructions,
+      recipientTaxId: command.recipientTaxId,
+      country: normalizedCountry,
+      vatAmount: 0,
+      totalAmount: reservation.lockedPrice,
+      isTest: !liveMode,
+      status: 'paid',
+      items: {
+        create: orderItemLines,
       },
-      include: { items: true },
-    })
+    }))
 
     if (reservation.couponCode) {
-      await tx.coupon.update({
-        where: { code: reservation.couponCode },
-        data: { usedCount: { increment: 1 } },
-      })
+      const coupon = await tx.coupon.findUnique({ where: { code: reservation.couponCode } })
+      if (!coupon || !coupon.active) {
+        throw new RouteError(409, 'coupon_max_uses_reached')
+      }
+
+      if (coupon.maxUses == null) {
+        await tx.coupon.update({
+          where: { code: reservation.couponCode },
+          data: { usedCount: { increment: 1 } },
+        })
+      } else {
+        const updated = await tx.coupon.updateMany({
+          where: {
+            code: reservation.couponCode,
+            usedCount: coupon.usedCount,
+          },
+          data: {
+            usedCount: {
+              increment: 1,
+            },
+          },
+        })
+
+        const newUsedCount = coupon.usedCount + 1
+        if (updated.count !== 1 || newUsedCount > coupon.maxUses) {
+          throw new RouteError(409, 'coupon_max_uses_reached')
+        }
+      }
     }
 
     await tx.reservation.delete({ where: { id: reservation.id } })
 
-    return { ok: true as const, orderId: order.id, orderNumber: order.orderNumber, totalAmount: order.totalAmount }
+    return {
+      ok: true as const,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      totalAmount: order.totalAmount,
+      orderItemUnitPrice: order.items[0]?.unitPrice ?? reservation.lockedPrice,
+      orderItemQuantity: order.items.reduce((sum, item) => sum + item.quantity, 0),
+    }
   })
 
   if ('ok' in result && result.ok && product) {
@@ -328,8 +365,8 @@ export async function confirmPayment(command: ConfirmPaymentCommand) {
       items: [
         {
           productName: product.name,
-          quantity: reservation.quantity,
-          unitPrice: result.totalAmount,
+          quantity: result.orderItemQuantity,
+          unitPrice: result.orderItemUnitPrice,
         },
       ],
       paymentMethod: reservation.paymentMethod,

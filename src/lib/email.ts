@@ -1,7 +1,8 @@
 import nodemailer from 'nodemailer'
+import { getPaymentMode } from '@/src/lib/runtimeMode'
 
 function getTransport() {
-  const mode = process.env.NEXT_PUBLIC_PAYMENT_MODE || 'demo'
+  const mode = getPaymentMode()
   if (mode !== 'live') {
     // Demo: mailcatcher on localhost:1025 (or Mailhog)
     return nodemailer.createTransport({
