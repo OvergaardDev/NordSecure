@@ -5,6 +5,11 @@ APP_DIR="/var/www/nordsecure"
 
 cd "$APP_DIR"
 
+echo "[0/7] Ensure runtime env exists"
+if [ ! -f .env ] && [ -f .env.example ]; then
+	cp .env.example .env
+fi
+
 echo "[1/7] Pull latest code"
 git pull --ff-only
 
