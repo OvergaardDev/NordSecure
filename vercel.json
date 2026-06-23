@@ -1,0 +1,26 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "installCommand": "npm ci",
+  "env": {
+    "NODE_ENV": "production"
+  },
+  "regions": ["iad1"],
+  "functions": {
+    "app/**": {
+      "maxDuration": 30,
+      "memory": 1024
+    },
+    "api/**": {
+      "maxDuration": 30,
+      "memory": 1024
+    }
+  },
+  "redirects": [
+    {
+      "source": "/admin",
+      "destination": "/admin/login",
+      "permanent": false
+    }
+  ]
+}

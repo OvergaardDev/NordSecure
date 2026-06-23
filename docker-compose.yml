@@ -1,11 +1,55 @@
 version: '3.8'
+
 services:
-  web:
-    build: .
-    ports:
-      - '3000:3000'
+  postgres:
+    image: postgres:15-alpine
+    container_name: nordsecure-db
     environment:
-      - DATABASE_URL=file:./dev.db
-      - NEXT_PUBLIC_PAYMENT_MODE=demo
+      POSTGRES_USER: nordsecure_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: nordsecure
     volumes:
-      - .:/app
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nordsecure_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: nordsecure-app
+    environment:
+      DATABASE_URL: postgresql://nordsecure_user:${DB_PASSWORD:-postgres}@postgres:5432/nordsecure
+      NODE_ENV: production
+      PAYMENT_MODE: ${PAYMENT_MODE:-demo}
+      NEXT_PUBLIC_PAYMENT_MODE: ${PAYMENT_MODE:-demo}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+      BTCPAY_SERVER_URL: ${BTCPAY_SERVER_URL}
+      BTCPAY_API_KEY: ${BTCPAY_API_KEY}
+      BTCPAY_STORE_ID: ${BTCPAY_STORE_ID}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      EMAIL_FROM: ${EMAIL_FROM}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_SECRET: ${ADMIN_SECRET}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  postgres_data:
