@@ -1,0 +1,1 @@
+﻿SELECT * FROM "Order" ORDER BY "createdAt" DESC LIMIT 1;

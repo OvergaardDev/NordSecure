@@ -1,0 +1,34 @@
+import { NextResponse } from 'next/server'
+import { prisma } from '@/src/lib/prisma'
+
+interface Params { params: { id: string } }
+
+export async function GET(_req: Request, { params }: Params) {
+  const post = await prisma.post.findUnique({ where: { id: parseInt(params.id) } })
+  if (!post) return NextResponse.json({ error: 'not found' }, { status: 404 })
+  return NextResponse.json(post)
+}
+
+export async function PUT(req: Request, { params }: Params) {
+  const body = await req.json()
+  const { title, slug, content, excerpt, tags, status, featuredImage } = body
+  const post = await prisma.post.update({
+    where: { id: parseInt(params.id) },
+    data: {
+      title,
+      slug,
+      content,
+      excerpt,
+      tags: tags ?? null,
+      status,
+      featuredImage: featuredImage ?? null,
+      publishedAt: status === 'published' ? new Date() : undefined,
+    },
+  })
+  return NextResponse.json(post)
+}
+
+export async function DELETE(_req: Request, { params }: Params) {
+  await prisma.post.delete({ where: { id: parseInt(params.id) } })
+  return NextResponse.json({ ok: true })
+}

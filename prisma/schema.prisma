@@ -1,0 +1,138 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Product {
+  id          Int      @id @default(autoincrement())
+  sku         String   @unique
+  name        String
+  description String?
+  images      String?
+  standardPrice Int
+  standardStock Int    @default(0)
+  lowStockThreshold Int @default(3)
+  maxPerOrder Int      @default(1)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  OrderItems  OrderItem[]
+  Reviews     Review[]
+}
+
+model Coupon {
+  id             Int      @id @default(autoincrement())
+  code           String   @unique
+  description    String?
+  discountType   String   // "percent" or "fixed"
+  discountValue  Int
+  minOrderAmount Int?
+  maxUses        Int?
+  usedCount      Int      @default(0)
+  active         Boolean  @default(true)
+  startsAt       DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Order {
+  id          Int       @id @default(autoincrement())
+  orderNumber String    @unique
+  paymentMethod String  @default("crypto")
+  paymentAsset String?
+  couponCode  String?
+  discountAmount Int    @default(0)
+  customerName String
+  customerEmail String
+  shippingPhone String?
+  shippingCompany String?
+  shippingAddressLine1 String?
+  shippingAddressLine2 String?
+  shippingCity String?
+  shippingRegion String?
+  shippingPostalCode String?
+  deliveryInstructions String?
+  recipientTaxId String?
+  customerId   Int?
+  customer     Customer? @relation(fields: [customerId], references: [id])
+  country     String
+  vatAmount   Int
+  totalAmount Int
+  isTest      Boolean   @default(true)
+  status      String    @default("pending")
+  createdAt   DateTime  @default(now())
+  items       OrderItem[]
+}
+
+model OrderItem {
+  id        Int     @id @default(autoincrement())
+  order     Order   @relation(fields: [orderId], references: [id])
+  orderId   Int
+  product   Product @relation(fields: [productId], references: [id])
+  productId Int
+  quantity  Int
+  unitPrice Int     // locked price in cents/euro units
+}
+
+model Review {
+  id        Int     @id @default(autoincrement())
+  product   Product @relation(fields: [productId], references: [id])
+  productId Int
+  author    String
+  rating    Int
+  text      String
+  status    String  @default("pending")
+  createdAt DateTime @default(now())
+}
+
+model Post {
+  id          Int      @id @default(autoincrement())
+  title       String
+  slug        String   @unique
+  excerpt     String?
+  content     String
+  featuredImage String?
+  tags        String?
+  status      String   @default("draft")
+  publishedAt DateTime?
+  createdAt   DateTime @default(now())
+}
+
+model Event {
+  id        Int     @id @default(autoincrement())
+  type      String
+  sessionId String
+  country   String?
+  referrer  String?
+  createdAt DateTime @default(now())
+}
+
+model Customer {
+  id        Int    @id @default(autoincrement())
+  email     String @unique
+  name      String?
+  orders    Order[]
+}
+
+model Reservation {
+  id         Int      @id @default(autoincrement())
+  productId  Int
+  productSku String
+  paymentMethod String @default("crypto")
+  paymentAsset String?
+  paymentId  String?  @unique
+  paymentStatus String @default("pending")
+  lockedPrice Int
+  couponCode String?
+  discountAmount Int   @default(0)
+  reservedIndex Int
+  sessionId  String
+  quantity   Int
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+}
