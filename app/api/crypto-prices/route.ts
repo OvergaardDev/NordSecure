@@ -9,7 +9,7 @@ const COIN_SYMBOLS: Record<string, string> = {
   btc: '₿',
 }
 
-export async function GET(req: Request) {
+export async function GET() {
   try {
     const assets = ['btc']
     const coinGeckoIds = assets.map(a => COIN_IDS[a]).join(',')

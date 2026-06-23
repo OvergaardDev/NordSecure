@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
@@ -83,10 +83,6 @@ function countWords(text: string) {
   return text.trim().split(/\s+/).filter(Boolean).length
 }
 
-function articlePreviewClassName() {
-  return 'prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-white prose-a:text-brand-300 prose-blockquote:border-brand-400 prose-blockquote:text-slate-300 prose-img:rounded-xl prose-img:border prose-img:border-slate-800'
-}
-
 function htmlToEditorContent(content: string) {
   const parsed = parseFrontmatter(content)
   if (!parsed.body) return '<p></p>'
@@ -123,7 +119,6 @@ export function PostEditor({
   const [error, setError] = useState('')
   const [previewMode, setPreviewMode] = useState<'edit' | 'preview' | 'split'>('split')
   const [uploadingImage, setUploadingImage] = useState(false)
-  const [imageUrl, setImageUrl] = useState('')
 
   const autoSlug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
@@ -180,12 +175,6 @@ export function PostEditor({
     const url = window.prompt('Paste the URL')
     if (!url) return
     editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
-  }
-
-  const insertImageByUrl = () => {
-    if (!editor || !imageUrl.trim()) return
-    editor.chain().focus().setImage({ src: imageUrl.trim(), alt: title || 'Blog image' }).run()
-    setImageUrl('')
   }
 
   const insertImageFromFile = async (event: ChangeEvent<HTMLInputElement>) => {

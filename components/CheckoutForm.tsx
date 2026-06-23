@@ -476,7 +476,7 @@ export function CheckoutForm({ productSku, phoneModel, lockedPrice, total }: Che
                 className="col-span-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm focus:border-brand-500 focus:outline-none"
                 title="Select country to set phone prefix"
               >
-                {Object.entries(EUROPE_SHIPPING_COUNTRIES).map(([code, name]) => (
+                {Object.entries(EUROPE_SHIPPING_COUNTRIES).map(([code]) => (
                   <option key={code} value={code}>
                     {COUNTRY_CALLING_CODES[code] || '+' + code}
                   </option>
