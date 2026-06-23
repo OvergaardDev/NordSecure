@@ -18,6 +18,11 @@ export async function POST(req: Request) {
   const rawBody = await req.text()
   const secret = String(process.env.BTCPAY_WEBHOOK_SECRET || '')
   const signature = req.headers.get('btcpay-sig') || req.headers.get('BTCPay-Sig')
+  const isLiveMode = process.env.NEXT_PUBLIC_PAYMENT_MODE === 'live'
+
+  if (isLiveMode && !secret) {
+    return NextResponse.json({ error: 'webhook_not_configured' }, { status: 503 })
+  }
 
   if (secret && !verifySignature(rawBody, signature, secret)) {
     return NextResponse.json({ error: 'invalid_signature' }, { status: 401 })

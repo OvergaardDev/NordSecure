@@ -65,6 +65,15 @@ export async function POST(req: Request) {
   // find product
   const product = await prisma.product.findUnique({ where: { sku: productSku } })
   if (!product) return NextResponse.json({ error: 'product_not_found' }, { status: 404 })
+  if (!product.isActive) {
+    return NextResponse.json({ error: 'product_inactive' }, { status: 409 })
+  }
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > product.maxPerOrder) {
+    return NextResponse.json({ error: 'invalid_quantity' }, { status: 400 })
+  }
+  if (soldCount + quantity > product.standardStock) {
+    return NextResponse.json({ error: 'out_of_stock' }, { status: 409 })
+  }
 
   // create reservation expires in 15 minutes
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
@@ -112,6 +121,9 @@ export async function POST(req: Request) {
     await prisma.reservation.delete({ where: { id: reservation.id } }).catch(() => {})
     if (error instanceof Error && error.message === 'btcpay_not_configured') {
       return NextResponse.json({ error: 'live_crypto_not_configured' }, { status: 500 })
+    }
+    if (error instanceof Error && error.message === 'stripe_not_configured') {
+      return NextResponse.json({ error: 'live_stripe_not_configured' }, { status: 500 })
     }
     return NextResponse.json({ error: 'payment_provider_error' }, { status: 500 })
   }

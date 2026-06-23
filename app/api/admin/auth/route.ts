@@ -1,16 +1,20 @@
 import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
-import { createAdminToken } from '@/src/lib/auth'
+import { createAdminToken, getAdminPassword, isAdminAuthConfigured } from '@/src/lib/auth'
 
 export async function POST(req: Request) {
   const { password } = await req.json()
-  const expected = process.env.ADMIN_PASSWORD || 'admin'
+  const expected = getAdminPassword()
+
+  if (!isAdminAuthConfigured() || !expected) {
+    return NextResponse.json({ error: 'admin_auth_not_configured' }, { status: 503 })
+  }
 
   if (password !== expected) {
     return NextResponse.json({ error: 'invalid' }, { status: 401 })
   }
 
-  const token = createAdminToken()
+  const token = await createAdminToken()
   cookies().set('admin_session', token, {
     httpOnly: true,
     sameSite: 'lax',

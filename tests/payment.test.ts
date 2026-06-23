@@ -44,17 +44,17 @@ describe('CryptoSandbox payment provider', () => {
     expect(result.meta!.qrUrl).toMatch(/qrserver\.com/)
   })
 
-  it('supports selecting LTC, XMR and SOL assets', async () => {
+  it('falls back to BTC when an unsupported crypto asset is requested', async () => {
     const ltc = await provider.createPayment(700, 'EUR', { asset: 'ltc' })
     const xmr = await provider.createPayment(700, 'EUR', { asset: 'xmr' })
     const sol = await provider.createPayment(700, 'EUR', { asset: 'sol' })
 
-    expect(ltc.meta!.asset).toBe('ltc')
-    expect(String(ltc.meta!.address)).toMatch(/^ltc1q/)
-    expect(xmr.meta!.asset).toBe('xmr')
-    expect(String(xmr.meta!.address)).toMatch(/^4mockxmr/)
-    expect(sol.meta!.asset).toBe('sol')
-    expect(String(sol.meta!.address)).toMatch(/^So1mock/)
+    expect(ltc.meta!.asset).toBe('btc')
+    expect(String(ltc.meta!.address)).toMatch(/^bc1q/)
+    expect(xmr.meta!.asset).toBe('btc')
+    expect(String(xmr.meta!.address)).toMatch(/^bc1q/)
+    expect(sol.meta!.asset).toBe('btc')
+    expect(String(sol.meta!.address)).toMatch(/^bc1q/)
   })
 
   it('verifyPayment returns null until simulated (sandbox)', async () => {

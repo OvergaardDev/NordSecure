@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { marked } from 'marked'
 import { prisma } from '@/src/lib/prisma'
+import { parsePostTags } from '@/src/lib/posts'
 
 interface Props {
   params: { slug: string }
@@ -74,9 +75,9 @@ export default async function BlogPostPage({ params }: Props) {
         />
       )}
 
-      {post.tags && (
+      {parsePostTags(post.tags).length > 0 && (
         <div className="flex flex-wrap gap-2 mb-4">
-          {(JSON.parse(post.tags) as string[]).map((tag) => (
+          {parsePostTags(post.tags).map((tag) => (
             <span
               key={tag}
               className="bg-brand-500/10 text-brand-400 text-xs px-2 py-0.5 rounded"

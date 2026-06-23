@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { prisma } from '@/src/lib/prisma'
+import { parsePostTags } from '@/src/lib/posts'
 
 export const metadata: Metadata = {
   title: 'Blog',
@@ -38,9 +39,9 @@ export default async function BlogPage() {
                     className="w-full h-48 object-cover rounded-lg mb-4"
                   />
                 )}
-                {post.tags && (
+                {parsePostTags(post.tags).length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-3">
-                    {(JSON.parse(post.tags) as string[]).map((tag) => (
+                    {parsePostTags(post.tags).map((tag) => (
                       <span
                         key={tag}
                         className="bg-brand-500/10 text-brand-400 text-xs px-2 py-0.5 rounded"

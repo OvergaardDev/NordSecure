@@ -6,6 +6,20 @@ import { normalizeCountryCode } from '../../../../src/lib/shipping'
 import { isCryptoPaymentPaid } from '@/src/lib/simulatedCryptoPayments'
 import { sendOrderConfirmation } from '@/src/lib/email'
 
+function paymentMatchesReservation(
+  reservation: { id: number; lockedPrice: number; paymentId: string | null },
+  verified: { amount: number; currency: string; meta?: Record<string, unknown> } | null
+) {
+  if (!verified) return false
+
+  const amountMatches = Math.abs(Number(verified.amount || 0) - Number(reservation.lockedPrice)) < 0.01
+  const currencyMatches = String(verified.currency || '').toUpperCase() === 'EUR'
+  const verifiedReservationId = String(verified.meta?.reservationId || '')
+  const reservationIdMatches = !verifiedReservationId || verifiedReservationId === String(reservation.id)
+
+  return amountMatches && currencyMatches && reservationIdMatches
+}
+
 export async function POST(req: Request) {
   const body = await req.json()
   const {
@@ -36,25 +50,35 @@ export async function POST(req: Request) {
   if (reservation.expiresAt.getTime() < Date.now()) {
     return NextResponse.json({ error: 'reservation_expired' }, { status: 410 })
   }
+  if (!reservation.paymentId || reservation.paymentId !== paymentId) {
+    return NextResponse.json({ error: 'payment_mismatch' }, { status: 409 })
+  }
 
   let verified
   try {
     if (reservation.paymentMethod === 'stripe') {
       const provider = getStripeProvider()
-      verified = await provider.verifyPayment(paymentId)
+      verified = await provider.verifyPayment(reservation.paymentId)
     } else {
       const provider = getCryptoProvider()
-      verified = await provider.verifyPayment(paymentId)
+      verified = await provider.verifyPayment(reservation.paymentId)
     }
   } catch (error) {
     if (error instanceof Error && error.message === 'btcpay_not_configured') {
       return NextResponse.json({ error: 'live_crypto_not_configured' }, { status: 500 })
     }
+    if (error instanceof Error && error.message === 'stripe_not_configured') {
+      return NextResponse.json({ error: 'live_stripe_not_configured' }, { status: 500 })
+    }
     return NextResponse.json({ error: 'payment_provider_error' }, { status: 500 })
   }
 
+  if (verified && !paymentMatchesReservation(reservation, verified)) {
+    return NextResponse.json({ error: 'payment_verification_mismatch' }, { status: 409 })
+  }
+
   const liveMode = isLivePaymentMode()
-  const simulatedPaid = !liveMode && isCryptoPaymentPaid(paymentId)
+  const simulatedPaid = !liveMode && isCryptoPaymentPaid(reservation.paymentId)
   const isPaid = verified?.status === 'paid' || reservation.paymentStatus === 'paid' || simulatedPaid
 
   if (!isPaid) return NextResponse.json({ status: 'pending' })

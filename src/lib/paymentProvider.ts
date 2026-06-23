@@ -19,6 +19,7 @@ type BTCPayInvoice = {
   amount?: number
   currency?: string
   checkoutLink?: string
+  metadata?: Record<string, unknown>
 }
 
 function randomToken(length: number): string {
@@ -172,6 +173,7 @@ export class BTCPayProvider implements PaymentProvider {
       isTest: false,
       meta: {
         btcpayStatus: invoice.status || 'Unknown',
+        reservationId: String(invoice.metadata?.reservationId || ''),
       },
     }
   }
@@ -272,6 +274,7 @@ export class StripeProvider implements PaymentProvider {
       isTest: !String(process.env.STRIPE_SECRET_KEY || '').startsWith('sk_live_'),
       meta: {
         stripeStatus: intent.status,
+        reservationId: String(intent.metadata?.reservationId || ''),
       },
     }
   }
@@ -343,6 +346,10 @@ export function getCryptoProvider(): PaymentProvider {
 }
 
 export function getStripeProvider(): PaymentProvider {
+  if (isLiveMode() && !StripeProvider.isConfigured()) {
+    throw new Error('stripe_not_configured')
+  }
+
   if (StripeProvider.isConfigured()) {
     return new StripeProvider()
   }
